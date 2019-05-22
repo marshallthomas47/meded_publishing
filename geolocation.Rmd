@@ -7,11 +7,8 @@ editor_options:
 chunk_output_type: console
 ---
 
-# Load libraries
+## Load libraries
 ```{r, echo=FALSE}
-# Note to self - I should make it such that packages are installed 
-# if they aren't already available.
-
 library(yaml)
 library(XML)
 library(countrycode)
@@ -26,14 +23,14 @@ library(readr)
 ## CHANGE VAR HERE!
 ```{r}
 # Select the file to analyze
-filename = "education-2015-2016"
+#filename = "education-2015-2016"
 #filename = "medicine-2015-2016"
-#filename = "med-ed-2015-2016"
+filename = "med-ed-2015-2016"
 #filename = "biology-2015-2016"
 
 # Indicate sampling or not
 # values: "" or "_sample"
-sampling_status = "_sample"
+sampling_status = ""
 ```
 
 ## Get data out of the XML file
@@ -44,7 +41,7 @@ top = xmlRoot(doc)
 nrecords = length(names(top))
 ```
 
-# Set up list of positions to pull (if sampling) or list of all
+## Set up list of positions to pull (if sampling) or list of all
 ```{r}
 # Create a sample, setting the random number generator seed based on the length of the filename (to reproduce results)
 if (sampling_status =="_sample"){
@@ -55,7 +52,7 @@ if (sampling_status =="_sample"){
 }
 ```
 
-# Appending records to a list
+## Appending records to a list
 ```{r}
 # Data frame to hold the XML being read in
 all_records = data.frame(read.csv(text="PMID,Journal,Year,Month,Day,Affiliation,NAuth"))
@@ -96,7 +93,7 @@ for (i in 1:length(recstorecord)){
 }
 ```
 
-# Clean up the emails, etc.
+## Clean up the emails, etc.
 ```{r}
 # Function to remove emails
 split_strings = function(in_string){
@@ -195,7 +192,7 @@ for (i in 1:nrow(all_records)){
 }
 ```
 
-# Function to return the distal end of the records
+## Function to return the distal end of the records
 ```{r}
 # First trim to first 1,2, or 3 "phrases"
 trimmer = function(input_string, return_length){
@@ -223,7 +220,7 @@ trimmer = function(input_string, return_length){
 }
 ```
 
-# Function that gets the country
+## Function that gets the country
 ```{r}
 getcountry = function(address){
   country = "No_country"
@@ -239,7 +236,7 @@ getcountry = function(address){
 }
 ```
 
-# Query function - this is where your API keys must be stored
+## Query function - this is where your API keys must be retrieved
 ```{r}
 api_keys = yaml.load_file("keys.yaml")
 api_key = api_keys$paid_key
@@ -254,7 +251,7 @@ URLquery = function(address){
 }
 ```
 
-# Function to check for place names in a string
+## Function to check for place names in a string
 ```{r}
 # Check shorter strings to ensure they have identifiable information in them
 citystring = read_file("./raw_data/citynames.txt")
@@ -273,7 +270,7 @@ geochecker = function(input_string){
 }
 ```
 
-# Create a subset of the records with only the ID and the ShortAffil
+## Create a subset of the records with only the ID and the ShortAffil
 ```{r}
 # Only unique records - so queries aren't repeated
 stacked_records = transform(stacked_records, 
@@ -281,7 +278,7 @@ stacked_records = transform(stacked_records,
 query_list = unique(select(stacked_records, ShortAffil, id))
 ```
 
-# Fill the document with N/As
+## Fill the document with N/As
 ```{r}
 # Populate with N/A
 query_list$lat = NA
@@ -292,7 +289,7 @@ query_list$country = NA
 counter = 0
 ```
 
-# Run the actual queries
+## Run the actual queries
 ```{r}
 # Run queries for each unique affiliation string
 start_time = Sys.time()
@@ -339,14 +336,14 @@ end_time = Sys.time()
 print(end_time - start_time)
 ```
 
-# Save the query data
+## Save the query data
 ```{r}
 queryrecpath = paste("./processed_data/",filename,"_uniquegeolocations",
                      sampling_status,".csv", sep = "")
 write.csv(query_list, file = queryrecpath)
 ```
 
-# Join records and save the data
+## Join records and save the data
 ```{r}
 geolocated_records = merge(stacked_records, 
                          select(query_list, id,lat,long,country), by="id")
@@ -355,7 +352,7 @@ newpath = paste("./processed_data/",filename,sampling_status,".csv", sep = "")
 write.csv(newrec, file = newpath)
 ```
 
-# Indicate number of records in the dataset / depletion along the way
+## Indicate number of records in the dataset / depletion along the way
 ```{r}
 # Total number of records
 nrec = nrow(all_records)
@@ -397,7 +394,7 @@ logfile = paste(logfile, "Of the publications with a listed affilation, ", pwIDe
             " percent had at least one country identified.\n", sep = "")
 ```
 
-# Save the log data in a safe place
+## Save the log data in a safe place
 ```{r}
 logpath = paste("./processed_data/",filename,sampling_status,"_logs.txt", sep = "")
 write(logfile, file = logpath)

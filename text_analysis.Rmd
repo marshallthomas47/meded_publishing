@@ -1,0 +1,175 @@
+---
+title: "abstract_extraction"
+author: "Marshall Thomas"
+date: "3/31/2018"
+output: html_document
+editor_options: 
+chunk_output_type: console
+---
+## Load libraries
+```{r, echo=FALSE}
+library(wordcloud)
+library(dplyr)
+library(data.table)
+library(countrycode)
+library(XML)
+```
+
+## This loads is the raw XML data to extract MeSH terms
+```{r}
+filename = "med-ed-2015-2016"
+```
+
+## Load the right file
+```{r}
+pathname = paste("./raw_data/",filename,".xml",sep = "")
+doc = xmlTreeParse(pathname, useInternal = TRUE)
+top = xmlRoot(doc)
+```
+
+## Appending records to a list
+```{r}
+all_records = data.frame(read.csv(text="PMID,ABST,MESH,TYPE"))
+for (i in 1:length(names(top))){
+  record = top[[i]][["MedlineCitation"]]
+  Abs = record[["Article"]][["Abstract"]]
+  if(!is.null(Abs)){
+    Abstracts = c()
+    Sections = xmlElementsByTagName(Abs, "AbstractText", recursive = FALSE)
+    for (Section in Sections){
+      Abstracts = c(Abstracts, as.character(xmlSApply(Section, xmlValue)))
+      }
+    all_records[i,"ABST"][[1]] = list(Abstracts)
+    }
+  else {
+    all_records[i,"ABST"] = NA
+  }
+  MeshRecord = record[["MeshHeadingList"]]
+  Meshes = c()
+  MeshIDs = xmlElementsByTagName(MeshRecord, "MeshHeading", recursive = FALSE)
+  for (MeshID in MeshIDs){
+    desc = MeshID[["DescriptorName"]]
+    Meshes = c(Meshes, as.character(xmlSApply(desc, xmlValue)))
+  }
+  all_records[i,"MESH"][[1]] = list(Meshes)
+  all_records[i,"PMID"] = as.character((xmlSApply(record[["PMID"]], xmlValue)))
+}
+```
+
+## This is where data are joined to country data (from geolocation step)
+```{r}
+# SOURCE OF DATA - http://databank.worldbank.org/data/download/site-content/CLASS.xls
+economies = read.csv("./raw_data/WB_economies.csv")
+
+# Get country records (from other step)
+country_records = read.csv("./processed_data/med-ed-2015-2016.csv")
+
+country_ncountry = filter(country_records %>% group_by(PMID), !is.na(country))
+
+economies$LMIC = ifelse((economies$Income.group == "Lower middle income" |
+  economies$Income.group == "Low income"), "Low income", "High income")
+
+country_ncountry$Code = countrycode(country_ncountry$country, 
+                                    "country.name", "wb")
+
+country_ncountry = merge(x = country_ncountry, 
+      y = select(economies, Code, LMIC), by = 'Code')
+
+country_readytab = country_ncountry %>% group_by(PMID, LMIC)
+income_counts = summarise(country_readytab)
+
+# Group by HI, LI, or both
+PMIDbyIncome = dcast(as.data.table(income_counts), PMID ~ LMIC)
+PMIDbyIncome$Contributions = ifelse(!is.na(PMIDbyIncome$`High income`) &
+         !is.na(PMIDbyIncome$`Low income`), "Both", PMIDbyIncome$`High income`)
+PMIDbyIncome$Contributions = ifelse(is.na(PMIDbyIncome$Contributions),
+                                    PMIDbyIncome$`Low income`, PMIDbyIncome$Contributions)
+
+```
+
+## Calculate enrichment / depletion
+```{r}
+# Merge the records
+all_records = merge(all_records, select(PMIDbyIncome, PMID, Contributions), by = "PMID")
+
+# Make an array of all terms
+all_terms = as.data.table(unlist(all_records$MESH))
+all_terms = all_terms %>% group_by(V1)
+all_term_counts = tally(all_terms, sort = TRUE)
+
+# Make an array of terms in LICs
+Low_income = filter(all_records, Contributions != "High income")
+LI_terms = as.data.table(unlist(Low_income$MESH))
+LI_terms = LI_terms %>% group_by(V1)
+LI_term_counts = tally(LI_terms, sort = TRUE)
+
+# Merge the dataframes
+total_counts = merge(all_term_counts, LI_term_counts, by = "V1", all = TRUE)
+
+# Pick a min number of counts of each term
+min.x = ceiling(sum(total_counts$n.x, na.rm = TRUE)/1500)
+min.y = ceiling(sum(total_counts$n.y, na.rm = TRUE)/1500)
+
+# Make a new array only including terms with this many counts
+total_counts$include = (total_counts$n.x > min.x | total_counts$n.y > min.y)
+ratio_include = filter(total_counts, include == "TRUE")
+
+# Calculate ratio, subbing in a 1 where needed (when not in LIC records)
+ratio_include$enrich = ifelse(is.na(ratio_include$n.y), 
+                              (1/(ratio_include$n.x+1)), 
+                              (ratio_include$n.y / ratio_include$n.x))
+
+ratio_include$enrich = ratio_include$enrich * (nrow(all_records)/nrow(Low_income))
+
+enrich_count = sum(ratio_include$enrich > 2)
+
+# Determine if a term is a country name
+countries = unique(country_ncountry$country)
+ratio_include$country = ratio_include$V1 %in% countries 
+
+# Filter data
+terms_LIC = select(ratio_include, V1, enrich, country) %>% 
+  filter(enrich > (2) & !country)
+terms_HIC = select(ratio_include, V1, enrich, country) %>% 
+  filter(enrich < (1/2) & !country)
+terms_HIC$enrich = 1/terms_HIC$enrich
+```
+
+## Plot wordclouds of MESH term enrichment
+```{r}
+wordcloud(terms_LIC$V1, terms_LIC$enrich, 
+	               scale = c(1.5,0.5), min.freq = 1, rot.per = 0)
+wordcloud(terms_HIC$V1, terms_HIC$enrich, 
+	               scale = c(1.5,0.5), min.freq = 1, rot.per = 0)
+```
+
+## Sampling procedure to evaluate significance of term enrichment
+```{r}
+sample_size = nrow(Low_income)
+sample_array = c()
+enrich_factor = (nrow(all_records)/nrow(Low_income))
+# Generate 10,000 random samples and count the number of >2fold enriched terms
+for (i in 1:10000){
+  samp = sample_n(all_records, sample_size)
+  samp_terms = as.data.table(unlist(samp$MESH))
+  samp_terms = samp_terms %>% group_by(V1)
+  samp_term_counts = tally(samp_terms, sort = TRUE)
+  samp_counts = merge(all_term_counts, samp_term_counts, by = "V1", all = TRUE)
+  # Make a new array only including terms with this many counts
+  samp_counts$include = (samp_counts$n.x > min.x | samp_counts$n.y > min.y)
+  samp_ratio_include = filter(samp_counts, include == "TRUE")
+  # Calculate ratio, subbing in a 1 where needed (when not in LIC records)
+  samp_ratio_include$enrich = ifelse(is.na(samp_ratio_include$n.y), 
+                              (1/(samp_ratio_include$n.x+1)), 
+                              (samp_ratio_include$n.y / samp_ratio_include$n.x))
+  samp_ratio_include$enrich = samp_ratio_include$enrich * enrich_factor
+  samp_enrich_count = sum(samp_ratio_include$enrich > 2)
+  sample_array = c(sample_array, samp_enrich_count)
+}
+# Find the number of samples in which 39 or more terms are enriched
+# This is the number of enriched terms in the low / lower-middle income dataset
+sum(sample_array>=39)
+
+# Result is "0" - 0/10,000 samples have more enriched terms
+```
+

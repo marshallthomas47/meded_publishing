@@ -1,0 +1,110 @@
+---
+title: "income_contribs"
+author: "Marshall Thomas"
+date: "4/16/2018"
+output: html_document
+editor_options: 
+chunk_output_type: console
+---
+
+# CHANGE FILENAME HERE DEPENDING ON ANALYSIS
+```{r}
+filename = "med-ed-2015-2016"
+```
+
+# Load libraries
+```{r}
+library(diverse)
+library(XML)
+library(countrycode)
+library(data.table)
+library(dplyr)
+```
+
+```{r}
+pathname = paste("./processed_data/",filename,".csv",sep = "")
+country_records = read.csv(pathname)
+```
+
+```{r}
+# SOURCE OF DATA - http://databank.worldbank.org/data/download/site-content/CLASS.xls
+economies = read.csv("./raw_data/WB_economies.csv")
+
+# Get country records (from other step)
+
+country_ncountry = filter(country_records %>% group_by(PMID), !is.na(country))
+
+country_ncountry$Code = countrycode(country_ncountry$country, 
+                                    "country.name", "wb")
+
+country_ncountry = merge(x = country_ncountry, 
+      y = select(economies, Code, Income.group),
+                 by = 'Code')
+
+country_readytab = country_ncountry %>% group_by(PMID, Income.group)
+income_counts = summarise(country_readytab)
+
+# Get a table with columns for each income level
+PMIDbyIncome = dcast(income_counts, PMID ~ Income.group)
+
+# Group by lowest income bracket
+PMIDbyIncome$Contributions = PMIDbyIncome$`Low income`
+PMIDbyIncome$Contributions = ifelse(is.na(PMIDbyIncome$Contributions),
+                                    PMIDbyIncome$`Lower middle income`,
+                                    PMIDbyIncome$Contributions)
+PMIDbyIncome$Contributions = ifelse(is.na(PMIDbyIncome$Contributions),
+                                    PMIDbyIncome$`Upper middle income`,
+                                    PMIDbyIncome$Contributions)
+PMIDbyIncome$Contributions = ifelse(is.na(PMIDbyIncome$Contributions),
+                                    PMIDbyIncome$`High income`,
+                                    PMIDbyIncome$Contributions)
+
+percent_by_category = as.data.frame(
+  table(PMIDbyIncome$Contributions, dnn = c("Category")), stringsAsFactors = FALSE)
+
+percent_by_category$Fraction = 
+  percent_by_category$Freq / sum(percent_by_category$Freq)
+
+```
+
+```{r}
+countries_bycountry = country_ncountry %>% group_by(PMID, Code)
+country_counts = summarise(countries_bycountry)
+
+# Get a table with columns for each income level
+PMIDbyCountry = dcast(country_counts, PMID ~ Code)
+
+Total_US = sum(PMIDbyCountry$USA == "USA", na.rm = TRUE) 
+Total_Pubs = nrow(PMIDbyCountry)
+Fraction_US = Total_US / Total_Pubs
+
+Total_English = sum((PMIDbyCountry$USA == "USA" | PMIDbyCountry$CAN == "CAN" |
+                      PMIDbyCountry$AUS == "AUS" | PMIDbyCountry$GBR == "GBR")
+                      , na.rm = TRUE) 
+Fraction_English = Total_English / Total_Pubs
+
+percent_by_category = rbind(percent_by_category, c("USA",
+                                                   Total_US, Fraction_US))
+
+percent_by_category = rbind(percent_by_category, c("English Countries",
+                                                   Total_English, Fraction_English))
+```
+
+
+```{r}
+newpath = paste("./processed_data/",filename,"_contributions.csv",
+                sep = "")
+write.csv(percent_by_category, file = newpath)
+```
+
+# Calculate diversity
+```{r}
+sumcountries = colSums(!is.na(PMIDbyCountry[,2:ncol(PMIDbyCountry)]))
+div = diversity(sumcountries, type ='gs', category_row = TRUE)
+div_log = paste("The diversity of this dataset is", div[1,1], "")
+
+divpath = paste("./processed_data/",filename,"_diversity.txt",
+                sep = "")
+write(div_log, file = divpath)
+```
+

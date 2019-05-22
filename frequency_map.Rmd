@@ -1,0 +1,111 @@
+---
+title: "mapping"
+author: "Marshall Thomas"
+date: "3/30/2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(countrycode)
+library(data.table)
+library(rworldmap)
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(RColorBrewer)
+
+#make ggplot2 better
+theme_basic = theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = "black", size = 0),
+        axis.ticks.length = unit(0.2, "lines"),
+        axis.text.x = element_text(margin=margin(10,5,5,5,"pt")),
+        axis.text.y = element_text(margin=margin(5,10,5,5,"pt")))
+theme_set(theme_basic)
+```
+
+
+```{r}
+# This is the data (output from geolocation.Rmd) used for this analysis
+stacked_records = read.csv("./processed_data/med-ed-2015-2016.csv")
+```
+
+
+```{r}
+country_readytab = stacked_records %>% group_by(PMID, country)
+country_counts = summarise(country_readytab)
+country_data = as.data.frame(table(country_counts$country))
+country_data = subset(country_data, !is.na(Var1))
+country_data = subset(country_data, country_data$Var1 != "No_country")
+country_data$Percent = 100* country_data$Freq / sum(country_data$Freq)
+country_data$rank = rank(-(country_data$Freq), ties.method = "min")
+
+# Group all countries that have a rank of > 15 together in percentages
+for (i in 1:nrow(country_data)){
+  if (country_data$rank[i] > 5 && country_data$rank[i] < 11){
+    country_data$Name[i] = "6-10"
+    country_data$groupedrank[i] = 6
+  } else if (country_data$rank[i] > 10 && country_data$rank[i] < 21){
+    country_data$Name[i] = "11-20"
+    country_data$groupedrank[i] = 11
+  } else if (country_data$rank[i] > 20 && country_data$rank[i] < 41){
+    country_data$Name[i] = "21-40"
+    country_data$groupedrank[i] = 21
+  } else if (country_data$rank[i] > 40){
+    country_data$Name[i] = "41+"
+    country_data$groupedrank[i] = 41
+  }  else{
+    country_data$Name[i] = paste(as.character(country_data$rank[i]), as.character(country_data$Var1[i]), sep = " - ")
+  country_data$groupedrank[i] = country_data$rank[i]
+  }
+}
+country_data = country_data %>% group_by(Name)
+countries_ranked = summarize(country_data, Percent = sum(Percent), rank = mean(rank))
+countries_ranked$Name = as.factor(countries_ranked$Name)
+# This gives the countries in order
+countries_ranked$Country = as.factor(reorder(countries_ranked$Name, countries_ranked$rank))
+```
+
+# Get mini-table of top countries for making the case of few contribs
+```{r}
+top5 = filter(country_data, rank <= 5)
+sum(top5$Percent)
+```
+
+
+# Plot the country percentages (sorting must be right)
+```{r}
+# Picked color scale from colorbrewer site 
+pal = rev(brewer.pal(9, "OrRd"))
+
+p1 = ggplot(countries_ranked[order(countries_ranked$rank),], 
+       aes(x = "", y = Percent, fill = Country)) +
+  geom_bar(stat = "identity", color = "black") +
+  scale_fill_manual(values = pal) +
+  xlab("") + ylab("Percent of total countries represented") +
+  scale_y_reverse()
+p1
+```
+
+# Generate the map
+```{r}
+country_data$code = countrycode(country_data$Var1, 'country.name', 'iso2c') 
+
+country_data$code[country_data$Var1 == "Cura\x92_ao"] = "CW"
+
+mapped_data = joinCountryData2Map(as.data.frame(country_data), joinCode = "ISO2", 
+    nameJoinColumn = "code")
+
+# Draw the map
+par(mai=c(0,0,0.2,0),xaxs="i",yaxs="i")
+mapCountryData(mapped_data, nameColumnToPlot = "groupedrank", 
+               catMethod = "categorical",
+               numCats = 3*max(country_data$groupedrank),
+               missingCountryCol = "grey80",
+               colourPalette = pal,
+               mapTitle = "", addLegend = F,
+               mapRegion = "world")
+```

@@ -1,0 +1,8 @@
+Source file:	./raw_data/education-2015-2016.xml
+Geolocation was run at 2018-04-22 19:44:55
+There are 2500 publications in this dataset.
+There are 2099 publications with an affiliation listed in this dataset.
+Of all publications, 83.96 percent have an affiliation shown.
+There are 2053 publications with at least one country identified.
+Of the publications with a listed affilation, 97.81 percent had at least one country identified.
+

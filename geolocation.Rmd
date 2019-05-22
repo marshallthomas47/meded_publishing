@@ -1,0 +1,407 @@
+---
+title: "geography_analysis"
+author: "Marshall Thomas"
+date: "3/14/2018"
+output: html_document
+editor_options: 
+chunk_output_type: console
+---
+
+# Load libraries
+```{r, echo=FALSE}
+# Note to self - I should make it such that packages are installed 
+# if they aren't already available.
+
+library(yaml)
+library(XML)
+library(countrycode)
+library(data.table)
+library(jsonlite)
+library(stringr)
+library(dplyr)
+library(RCurl)
+library(readr)
+```
+
+## CHANGE VAR HERE!
+```{r}
+# Select the file to analyze
+filename = "education-2015-2016"
+#filename = "medicine-2015-2016"
+#filename = "med-ed-2015-2016"
+#filename = "biology-2015-2016"
+
+# Indicate sampling or not
+# values: "" or "_sample"
+sampling_status = "_sample"
+```
+
+## Get data out of the XML file
+```{r}
+pathname = paste("./raw_data/",filename,".xml",sep = "")
+doc = xmlTreeParse(pathname, useInternal = TRUE)
+top = xmlRoot(doc)
+nrecords = length(names(top))
+```
+
+# Set up list of positions to pull (if sampling) or list of all
+```{r}
+# Create a sample, setting the random number generator seed based on the length of the filename (to reproduce results)
+if (sampling_status =="_sample"){
+  set.seed(nchar(filename))
+  recstorecord = sample(nrecords, 2500, replace = FALSE)
+} else{
+  recstorecord = 1:nrecords
+}
+```
+
+# Appending records to a list
+```{r}
+# Data frame to hold the XML being read in
+all_records = data.frame(read.csv(text="PMID,Journal,Year,Month,Day,Affiliation,NAuth"))
+for (i in 1:length(recstorecord)){
+  record = top[[recstorecord[i]]][["MedlineCitation"]]
+  Auths = record[["Article"]][["AuthorList"]]
+  NAuth = 0
+  if(!is.null(Auths)){
+    Authors = xmlElementsByTagName(Auths, "Author", recursive = FALSE)
+    Affils = c()
+    for (Author in Authors){
+      NAuth = NAuth+1
+      if (!is.null(Author[["AffiliationInfo"]])){
+        EachAuth = xmlElementsByTagName(Author, "AffiliationInfo", recursive = FALSE)
+        for (Each in EachAuth){
+          Affils = c(Affils, 
+                           as.character(xmlSApply(Each, xmlValue)))
+        }
+      }
+    }
+    if(length(Affils) >0){
+      all_records[i,"Affiliation"][[1]] = list(Affils)
+    } 
+    else {
+      all_records[i,"Affiliation"] = NA
+    }
+  }
+  else {
+    all_records[i,"Affiliation"] = NA
+  }
+  all_records[i,"Journal"] = 
+    as.character((xmlSApply(record[["Article"]][["Journal"]][["Title"]], xmlValue)))
+  all_records[i,"PMID"] = as.character((xmlSApply(record[["PMID"]], xmlValue)))
+  all_records[i,"Year"] = as.integer((xmlSApply(record[["DateCompleted"]][["Year"]], xmlValue)))
+  all_records[i,"Month"] = as.integer((xmlSApply(record[["DateCompleted"]][["Month"]], xmlValue)))
+  all_records[i,"Day"] = as.integer((xmlSApply(record[["DateCompleted"]][["Day"]], xmlValue)))
+  all_records[i,"NAuth"] = as.integer(NAuth)
+}
+```
+
+# Clean up the emails, etc.
+```{r}
+# Function to remove emails
+split_strings = function(in_string){
+  # Strip out email addresses
+  in_string = gsub("\\s*Electronic address.*[a-z0-9\\.\\_\\-]+\\@[a-z0-9\\.\\-\\_]+",
+                   "", in_string, perl = TRUE, ignore.case = TRUE)
+  in_string = gsub("\\s*e.?mail.*[a-z0-9\\.\\_\\-]+\\@[a-z0-9\\.\\-\\_]+",
+                   "", in_string, perl = TRUE, ignore.case = TRUE)
+  in_string = gsub("\\s*[a-z0-9\\.\\_\\-]+\\@[a-z0-9\\.\\-\\_]+",
+                   "", in_string, perl = TRUE, ignore.case = TRUE)
+  in_string = gsub("\\s*Telephone:*[0-9\\s\\-\\+]+",
+                   "", in_string, perl = TRUE, ignore.case = TRUE)
+  in_string = gsub("\\s*phone:*[+0-9\\s\\-\\+]+",
+                   "", in_string, perl = TRUE, ignore.case = TRUE)
+  
+  # Split by semicolons
+  return_strings = strsplit(in_string, "\\s?;\\s?")
+  return(return_strings[[1]])
+}
+
+# Function to split strings by apparent end of sentence
+split_sentences = function(in_string){
+  # Find matches to the end of a sentence (with a period), excluding PO Boxes
+  end_affil = gregexpr("[A-Za-z0-9 ]+, [A-Za-z0-9 ]+(?<!St)\\.(?![A-Z]\\.)", in_string, perl = TRUE)
+  
+  # Get the position of each match in the string
+  affil_match = end_affil[[1]]
+  affil_lengths = attributes(end_affil[[1]])$match.length
+  affil_split = affil_match + affil_lengths
+
+  if(!is.na(affil_split[[1]])){
+    return_strings = c()
+    affil_split = c("1", affil_split)
+    if ((nchar(in_string)+1)>as.integer(affil_split[length(affil_split)])){
+      affil_split = c(affil_split, (nchar(in_string)+1))
+    }
+    for (i in 1:(length(affil_split)-1)){
+      return_strings = c(return_strings, (substring(in_string,affil_split[[i]], affil_split[[i+1]])))
+    }
+  }
+  else{
+    return_strings = in_string
+  }
+  return(return_strings)
+}
+
+handler = function(instring){
+  if(!is.na(instring)){
+    int_out = split_strings(instring)
+    output = c()
+    for (elem in int_out){
+      output = c(output, split_sentences(elem))
+    }
+    return_string = c()
+    for (elem in output){
+      rem_dept = gsub("^[0-9 ]{1,2}|[^,]*Department[^,\\.]*(,| at| in )|[^,]*Division[^,\\.]*(,| at| in )|.Co.first author.", "", elem, ignore.case = TRUE)
+      rem_dept = tolower(rem_dept)
+      rem_dept = gsub("^[^a-zA-Z]", "", rem_dept)
+      rem_dept = gsub("[^a-z0-9]+$", "", rem_dept, ignore.case = TRUE)
+      if (nchar(rem_dept)>6){
+        return_string = c(return_string, rem_dept)
+      }
+    }
+  } else{
+    return_string = instring
+  }
+  return(return_string)
+}
+
+stacked_records = data.frame(read.csv(text="PMID,FullAffiliation,ShortAffil"))
+temp_records = data.frame(read.csv(text="PMID,FullAffiliation,ShortAffil"))
+
+for (i in 1:nrow(all_records)){
+  PMID = all_records$PMID[i]
+  FullAffiliation = all_records$Affiliation[[i]]
+  NAuth = all_records$NAuth[i]
+  counts = 0
+  for (i in 1:length(FullAffiliation)){
+    recs = handler(FullAffiliation[i])
+    for (rec in recs){
+      temp_records[1,"PMID"] = PMID
+      temp_records[1,"FullAffiliation"][[1]] = list(FullAffiliation)
+      temp_records[1,"NAuth"] = NAuth
+      temp_records[1,"ShortAffil"] = rec
+      stacked_records = rbind(stacked_records, temp_records)
+      counts = counts + 1
+    } 
+  }
+  if (counts ==0){
+    temp_records[1,"PMID"] = PMID
+    temp_records[1,"FullAffiliation"][[1]] = list(FullAffiliation)
+    temp_records[1,"NAuth"] = NAuth
+    temp_records[1,"ShortAffil"] = NA
+    stacked_records = rbind(stacked_records, temp_records)
+  }
+}
+```
+
+# Function to return the distal end of the records
+```{r}
+# First trim to first 1,2, or 3 "phrases"
+trimmer = function(input_string, return_length){
+  val = regexpr("\\s?[0-9a-z' \\.]+,\\s?[0-9a-z' \\.]+,\\s?[0-9a-z' \\.]+$",
+                    input_string, perl = TRUE, ignore.case = TRUE)
+  match = val[1]
+  # If no match or if the match is to the beginning of the string
+  if (abs(match) ==1 | return_length == 2){
+    val = regexpr("\\s?[0-9a-z' \\.]+,\\s?[0-9a-z' \\.]+$",
+                    input_string, perl = TRUE, ignore.case = TRUE)
+    match = val[1]
+  }
+  if (abs(match) ==1 | return_length == 1){
+    val = regexpr("\\s?[0-9a-z' \\.]+$",
+                    input_string, perl = TRUE, ignore.case = TRUE)
+    match = val[1]
+  }
+  # If the match is to a new substring
+  if (match >1 & match + 4 < nchar(input_string)){
+    return_string = substring(input_string, match, nchar(input_string))
+  } else {
+    return_string = NA
+  }
+  return(return_string)
+}
+```
+
+# Function that gets the country
+```{r}
+getcountry = function(address){
+  country = "No_country"
+  numel = length(address$results$address_components[[1]]$types)
+  if (numel > 0){
+    for (i in 1:numel){
+      if(address$results$address_components[[1]]$types[i][[1]][1] == "country"){
+        country = address$results$address_components[[1]]$long_name[i][[1]][1]
+      }
+    }
+  }
+  return(country)
+}
+```
+
+# Query function - this is where your API keys must be stored
+```{r}
+api_keys = yaml.load_file("keys.yaml")
+api_key = api_keys$paid_key
+
+URLquery = function(address){
+  url_start = "https://maps.googleapis.com/maps/api/geocode/json?address="
+  request_url = URLencode(paste(url_start, 
+                              address,"&key=",api_key, sep = ""))
+  response = getURL(request_url)
+  dat = fromJSON(response)
+  return(dat)
+}
+```
+
+# Function to check for place names in a string
+```{r}
+# Check shorter strings to ensure they have identifiable information in them
+citystring = read_file("./raw_data/citynames.txt")
+countrystring = read_file("./raw_data/countrynames.txt")
+geochecker = function(input_string){
+  if (nchar(input_string)>30){
+    proceed = TRUE
+  } else if(grepl(countrystring, input_string, ignore.case = TRUE)){
+    proceed = TRUE
+  } else if(grepl(citystring, input_string, ignore.case = TRUE)){
+    proceed = TRUE
+  } else {
+    proceed = FALSE
+  }
+  return(proceed)
+}
+```
+
+# Create a subset of the records with only the ID and the ShortAffil
+```{r}
+# Only unique records - so queries aren't repeated
+stacked_records = transform(stacked_records, 
+                            id=match(ShortAffil, unique(ShortAffil)))
+query_list = unique(select(stacked_records, ShortAffil, id))
+```
+
+# Fill the document with N/As
+```{r}
+# Populate with N/A
+query_list$lat = NA
+query_list$long = NA
+query_list$country = NA
+
+# Count the number of queries submitted
+counter = 0
+```
+
+# Run the actual queries
+```{r}
+# Run queries for each unique affiliation string
+start_time = Sys.time()
+out = ""
+for (i in 1:nrow(query_list)){
+  affiliation_string = query_list$ShortAffil[i]
+  out$status = "NA"
+  if (is.na(affiliation_string)){
+  }
+  else if (geochecker(affiliation_string)){
+    out = URLquery(affiliation_string)
+    counter = counter + 1
+    # If doesn't return, or address has lots of components...
+    if (out$status != "OK" | length(out$results$address_components) >2){
+      newstring = trimmer(affiliation_string, 3)
+      if (!is.na(newstring)){
+        out = URLquery(newstring)
+        counter = counter + 1
+        if (out$status != "OK"| length(out$results$address_components) >2){
+          newstring = trimmer(affiliation_string, 2)
+          if (!is.na(newstring)){
+            out = URLquery(newstring)
+            counter = counter + 1
+            if (out$status != "OK"| length(out$results$address_components) >2){
+              newstring = trimmer(affiliation_string, 1)
+              if (!is.na(newstring)){
+                out = URLquery(newstring)
+                counter = counter + 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if (out$status == "OK" & length(out$results$address_components) <4){
+    query_list$lat[i] = out$results$geometry$location$lat[[1]]
+    query_list$long[i] = out$results$geometry$location$lng[[1]]
+    query_list$country[i] = getcountry(out)
+  }
+}
+end_time = Sys.time()
+# Indicate the run time of the program
+print(end_time - start_time)
+```
+
+# Save the query data
+```{r}
+queryrecpath = paste("./processed_data/",filename,"_uniquegeolocations",
+                     sampling_status,".csv", sep = "")
+write.csv(query_list, file = queryrecpath)
+```
+
+# Join records and save the data
+```{r}
+geolocated_records = merge(stacked_records, 
+                         select(query_list, id,lat,long,country), by="id")
+newrec = select(geolocated_records, PMID, ShortAffil, NAuth, lat, long, country)
+newpath = paste("./processed_data/",filename,sampling_status,".csv", sep = "")
+write.csv(newrec, file = newpath)
+```
+
+# Indicate number of records in the dataset / depletion along the way
+```{r}
+# Total number of records
+nrec = nrow(all_records)
+nrec_repeat = length(tabulate(as.factor(geolocated_records$PMID)))
+if(nrec != nrec_repeat){
+  print("Error! Number of records does not match.")
+}
+# Number with an affilation given
+naffil = sum(!is.na(all_records$Affiliation))
+pwaffil = formatC(100*(naffil/nrec))
+
+# Number id'ed after algorithm runs
+geolocated_records$IDed = !is.na(geolocated_records$country)
+newtab = aggregate(geolocated_records$IDed, 
+                   by=list(Category=geolocated_records$PMID), FUN=sum)
+nIDed = sum(newtab$x != 0)
+pwIDed = formatC(100*(nIDed/naffil))
+
+logfile = paste("Source file:\t",pathname,"\n", sep ="")
+
+logfile = paste(logfile, "Geolocation was run at ",start_time,"\n", sep ="")
+
+logfile = paste(logfile, "There are ", 
+            nrec, 
+            " publications in this dataset.\n", sep = "")
+
+logfile = paste(logfile, "There are ", 
+            naffil, 
+            " publications with an affiliation listed in this dataset.\n", sep = "")
+
+logfile = paste(logfile, "Of all publications, ", pwaffil, 
+            " percent have an affiliation shown.\n", sep = "")
+
+logfile = paste(logfile, "There are ", 
+            nIDed, 
+            " publications with at least one country identified.\n", sep = "")
+
+logfile = paste(logfile, "Of the publications with a listed affilation, ", pwIDed, 
+            " percent had at least one country identified.\n", sep = "")
+```
+
+# Save the log data in a safe place
+```{r}
+logpath = paste("./processed_data/",filename,sampling_status,"_logs.txt", sep = "")
+write(logfile, file = logpath)
+```
+
+
+

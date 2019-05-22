@@ -1,0 +1,60 @@
+---
+title: "chisq_tests"
+output: html_document
+---
+
+# Performing chi-square goodness-of-fit tests for each comparison between Med Ed and the samples of other populations
+
+## For simplicity, I'm entering the data manually
+
+### Comparisons by income status
+```{r cars}
+# Counts of med ed
+med_ed = c(9149, 590, 385, 96)
+# Frequencies of med ed
+med_ed = med_ed / sum(med_ed)
+# Counts for each other field
+education = c(1774, 178, 72, 27)
+medicine = c(1818, 193, 85, 22)
+biology = c(1593, 593, 164, 15)
+
+# Statistical comparisons
+chisq.test(education, p = med_ed)
+chisq.test(medicine, p = med_ed)
+chisq.test(biology, p = med_ed)
+```
+
+### Comparisons of the USA 
+```{r}
+# Counts of med ed
+med_ed_USA = c(5851, 4369)
+# Frequencies of med ed
+med_ed_USA = med_ed_USA / sum(med_ed_USA)
+# Counts for each other field
+education_USA = c(1073, 978)
+medicine_USA = c(1026, 1092)
+biology_USA = c(868, 1497)
+
+# Statistical comparisons
+chisq.test(education_USA, p = med_ed_USA)
+chisq.test(medicine_USA, p = med_ed_USA)
+chisq.test(biology_USA, p = med_ed_USA)
+```
+
+### Comparisons of the "big four" 
+```{r}
+# Counts of med ed
+med_ed_Ang = c(8172, 2048)
+# Frequencies of med ed
+med_ed_Ang = med_ed_Ang / sum(med_ed_Ang)
+# Counts for each other field
+education_Ang = c(1517, 534)
+medicine_Ang = c(1462, 656)
+biology_Ang = c(1136, 1229)
+
+# Statistical comparisons
+chisq.test(education_Ang, p = med_ed_Ang)
+chisq.test(medicine_Ang, p = med_ed_Ang)
+chisq.test(biology_Ang, p = med_ed_Ang)
+```
+
